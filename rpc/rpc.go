@@ -22,7 +22,8 @@ const (
 
 type request struct {
 	Method string            `json:"method"`
-	Args   []json.RawMessage `json:"args"`
+	Args   []json.RawMessage `json:"args"`  
+	// json.RawMessage is a []byte that delays JSON decoding until we know the type
 }
 
 type response struct {
@@ -57,20 +58,87 @@ func NewServer(receiver any) (*Server, error) {
 // and launch the accept loop without blocking the caller.
 // Start begins accepting remote calls at address. Use port 0 to request an available port.
 func (s *Server) Start(address string) error {
-	return errors.New("TODO: implement Server.Start")
+	s.mu.Lock() // Lock the mutex to ensure thread-safe access to the server's state
+	defer s.mu.Unlock() // Unlock the mutex when the function returns
+
+	if s.listener != nil {
+		return errors.New("server already started")
+	}
+
+	listener, err := net.Listen("tcp", address)	
+
+	if err != nil {
+		return fmt.Errorf("failed to start listener: %w", err)
+	}
+
+	s.listener = listener
+	s.stopped = make(chan struct{})
+	s.acceptDone = make(chan struct{})
+
+	go s.acceptLoop(listener, s.stopped, s.acceptDone)
+
+	return nil
+}
+
+func (s *Server) acceptLoop(listener net.Listener, stopped <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			select {
+			case <-stopped:
+				return // Stop() closed the listener on purpose
+			default:
+			}
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			time.Sleep(10 * time.Millisecond) // transient error: back off and retry
+			continue
+		}
+
+		s.workers.Add(1)
+		go func() {
+			defer s.workers.Done()
+			s.handle(conn)
+		}()
+	}
 }
 
 // TODO 2: Return the listener address safely while allowing port 0 discovery.
 // Address returns the address assigned to the running server.
 func (s *Server) Address() string {
-	return ""
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.listener == nil {
+		return ""
+	}
+	return s.listener.Addr().String()
 }
 
 // TODO 3: Close the listener, signal the accept loop, wait for its workers,
 // and leave the server in a state where Start can be called again.
 // Stop stops accepting new connections and waits for active handlers to finish.
 func (s *Server) Stop() error {
-	return errors.New("TODO: implement Server.Stop")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.listener == nil {
+		return nil
+	}
+
+	if err := s.listener.Close(); err != nil {
+		return fmt.Errorf("failed to close listener: %w", err)
+	}
+
+	close(s.stopped)
+	<-s.acceptDone
+
+	s.workers.Wait()
+	s.listener = nil
+	return nil
 }
 
 // TODO 4: Study this starter request handler, then complete and test the protocol
