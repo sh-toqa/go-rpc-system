@@ -22,7 +22,7 @@ const (
 
 type request struct {
 	Method string            `json:"method"`
-	Args   []json.RawMessage `json:"args"`  
+	Args   []json.RawMessage `json:"args"`
 	// json.RawMessage is a []byte that delays JSON decoding until we know the type
 }
 
@@ -58,24 +58,24 @@ func NewServer(receiver any) (*Server, error) {
 // and launch the accept loop without blocking the caller.
 // Start begins accepting remote calls at address. Use port 0 to request an available port.
 func (s *Server) Start(address string) error {
-	s.mu.Lock() // Lock the mutex to ensure thread-safe access to the server's state
+	s.mu.Lock()         // Lock the mutex to ensure thread-safe access to the server's state
 	defer s.mu.Unlock() // Unlock the mutex when the function returns
 
 	if s.listener != nil {
 		return errors.New("server already started")
 	}
 
-	listener, err := net.Listen("tcp", address)	
+	listener, err := net.Listen("tcp", address)
 
 	if err != nil {
-		return fmt.Errorf("failed to start listener: %w", err)
+		return fmt.Errorf("failed to start listener: %w", err) // %w wraps the original error for better error handling
 	}
 
 	s.listener = listener
 	s.stopped = make(chan struct{})
 	s.acceptDone = make(chan struct{})
 
-	go s.acceptLoop(listener, s.stopped, s.acceptDone)
+	go s.acceptLoop(listener, s.stopped, s.acceptDone) // listener not s.listener because we want to pass the local variable, not the struct field
 
 	return nil
 }
@@ -113,7 +113,7 @@ func (s *Server) Address() string {
 	defer s.mu.Unlock()
 
 	if s.listener == nil {
-		return ""
+		return "" // before start and after stop
 	}
 	return s.listener.Addr().String()
 }
@@ -265,5 +265,63 @@ func NewClient(address string) (*Client, error) {
 // response, return remote errors, and decode the response into out.
 // Call invokes method and decodes its result into out. Pass nil for no result.
 func (c *Client) Call(method string, out any, args ...any) error {
-	return errors.New("TODO: implement Client.Call")
+	// check validity of method name
+	if method == "" {
+		return errors.New("invalid method name")
+	}
+
+	// initialize connection with timeout
+	conn, err := net.DialTimeout("tcp", c.Address, c.Timeout)
+	if err != nil {
+		return fmt.Errorf("connect to %s: %w", c.Address, err)
+	}
+	defer conn.Close()
+
+	// set deadline for the connection
+	err = conn.SetDeadline(time.Now().Add(c.Timeout))
+	if err != nil {
+		return fmt.Errorf("set deadline: %w", err)
+	}
+
+	// encode the request to be sent to the server
+	encoder := json.NewEncoder(conn)
+	req := request{
+		Method: method,
+		Args:   make([]json.RawMessage, len(args)),
+	}
+	for i, arg := range args {
+		data, err := json.Marshal(arg)
+		if err != nil {
+			return fmt.Errorf("marshal argument %d: %w", i, err)
+		}
+		req.Args[i] = data
+	}
+
+	err = encoder.Encode(req)
+	if err != nil {
+		return fmt.Errorf("encode request: %w", err)
+	}
+
+	// decoding the response of the server
+	decoder := json.NewDecoder(conn)
+	var resp response
+	err = decoder.Decode(&resp)
+	if err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
+	if !resp.OK {
+		return errors.New(resp.Error)
+	}
+
+	if out == nil {
+		return nil
+	}
+
+	if err := json.Unmarshal(resp.Value, out); err != nil {
+		return fmt.Errorf("decode result: %w", err)
+	}
+	return nil
+
+	// return errors.New("TODO: implement Client.Call")
+
 }
