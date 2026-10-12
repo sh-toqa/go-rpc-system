@@ -383,7 +383,7 @@ func TestSilentClientDoesNotBlockStop(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(defaultCallTimeout * time.Second):
+	case <-time.After(defaultCallTimeout + 2*time.Second):
 		t.Fatal("Stop hung on a client that never sent a request")
 	}
 }
