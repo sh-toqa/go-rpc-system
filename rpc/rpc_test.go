@@ -383,7 +383,7 @@ func TestSilentClientDoesNotBlockStop(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(defaultCallTimeout * time.Second):
 		t.Fatal("Stop hung on a client that never sent a request")
 	}
 }
@@ -392,4 +392,19 @@ func TestServerSurvivesBadRequests(t *testing.T) {
 	// 1. start server + client
 	// 2. call "Panic" → expect an error
 	// 3. call "Add" with 2, 3 → expect no error and 5
+
+	server := startTestServer(t)
+	client := testClient(t, server)
+	var s string
+	if err := client.Call("Panic", &s); err == nil {
+		t.Fatal("expected panic error")
+	}
+
+	var sum int
+	if err := client.Call("Add", &sum, 2, 3); err != nil {
+		t.Fatalf("server stopped working after panic: %v", err)
+	}
+	if sum != 5 {
+		t.Fatalf("got %d, want 5", sum)
+	}
 }

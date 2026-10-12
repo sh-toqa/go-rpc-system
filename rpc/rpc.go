@@ -60,6 +60,7 @@ func NewServer(receiver any) (*Server, error) {
 // Start begins accepting remote calls at address. Use port 0 to request an available port.
 func (s *Server) Start(address string) error {
 	//another goroutine cannot acquire the same mutex until it is unlocked
+	//if another goroutine is already inside Start, Stop, or Address, this one waits here until it’s free
 	s.mu.Lock() // Lock the mutex to ensure thread-safe access to the server's state
 
 	// defer = schedule this line to run at the END of the function
@@ -71,13 +72,17 @@ func (s *Server) Start(address string) error {
 	}
 	//reserve this address/port for me and deliver incoming TCP connections
 	// returns (listener, nil) on success or (nil, err) on failure
+	//Any TCP traffic that arrives for port X belongs to me
+	//the OS marks the socket as listening
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		return fmt.Errorf("failed to start listener: %w", err) // %w wraps the original error for better error handling
 	}
 
-	s.listener = listener              // save it in the server  the server is now "running"
-	s.stopped = make(chan struct{})    // create a fresh signal channel for this run
+	s.listener = listener // save it in the server  the server is now "running"
+	//Stop accepting new customers
+	s.stopped = make(chan struct{}) // create a fresh signal channel for this run
+	//client left
 	s.acceptDone = make(chan struct{}) // create a fresh loop finished channel for this run
 	// go = run acceptLoop in a NEW goroutine (in the background)
 	// we pass the local variables, so the loop has its own copies and never needs to read s.listener (which would need the lock)
@@ -87,13 +92,16 @@ func (s *Server) Start(address string) error {
 }
 
 // <-chan struct{} means this function can receive from the channel.
-// chan<- struct{} means this function can send to the channel or close it, provided it has the appropriate ownership.
+// chan<- struct{} means this function can send to the channel or close it, provided it has the appropriate ownership
+// sit at the door forever, let clients in one by one, and give each client to a worker goroutine. Exit when Stop says so.
 func (s *Server) acceptLoop(listener net.Listener, stopped <-chan struct{}, done chan<- struct{}) {
 	// signal that the accept loop is done when this function returns
 	defer close(done)
 	// The loop will keep accepting new connections until the listener is closed or an error occurs
 	for {
-		conn, err := listener.Accept()
+		//wait for a new client to connect, or for the listener to be closed
+		//Accept() blocks until a new connection is available or the listener is closed
+		conn, err := listener.Accept() //Waits for a client connection
 		if err != nil {
 			select {
 			case <-stopped:
@@ -158,6 +166,7 @@ func (s *Server) Stop() error {
 // handle reads one request, invokes it, and writes one response.
 func (s *Server) handle(connection net.Conn) {
 	defer connection.Close()
+	_ = connection.SetDeadline(time.Now().Add(defaultCallTimeout))
 	encoder := json.NewEncoder(connection)
 	defer func() {
 		if recovered := recover(); recovered != nil {
