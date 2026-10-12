@@ -362,3 +362,34 @@ func testClient(t *testing.T, server *Server) *Client {
 	}
 	return client
 }
+
+// new tests
+func TestSilentClientDoesNotBlockStop(t *testing.T) {
+	server := startTestServer(t)
+	conn, err := net.Dial("tcp", server.Address())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	time.Sleep(50 * time.Millisecond) // giving the srver time to accept the connection
+	done := make(chan error, 1)       // makes a room for 1 value in the channel, so that the goroutine can send the error without blocking
+	go func() {                       // withput this goroutine, the test will block forever because the server is waiting for the client to send a request
+		done <- server.Stop()
+	}()
+
+	select {
+	case err := <-done:
+		// Stop finished in time → good
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop hung on a client that never sent a request")
+	}
+}
+
+func TestServerSurvivesBadRequests(t *testing.T) {
+	// 1. start server + client
+	// 2. call "Panic" → expect an error
+	// 3. call "Add" with 2, 3 → expect no error and 5
+}
