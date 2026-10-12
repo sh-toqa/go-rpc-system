@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"sync"
 	"time"
+	"unicode"
 )
 
 const (
@@ -58,31 +59,39 @@ func NewServer(receiver any) (*Server, error) {
 // and launch the accept loop without blocking the caller.
 // Start begins accepting remote calls at address. Use port 0 to request an available port.
 func (s *Server) Start(address string) error {
-	s.mu.Lock()         // Lock the mutex to ensure thread-safe access to the server's state
+	//another goroutine cannot acquire the same mutex until it is unlocked
+	s.mu.Lock() // Lock the mutex to ensure thread-safe access to the server's state
+
+	// defer = schedule this line to run at the END of the function
 	defer s.mu.Unlock() // Unlock the mutex when the function returns
 
+	//flag: nil means stopped, not nil means running
 	if s.listener != nil {
-		return errors.New("server already started")
+		return errors.New("server already started") //reject 2nd start
 	}
-
+	//reserve this address/port for me and deliver incoming TCP connections
+	// returns (listener, nil) on success or (nil, err) on failure
 	listener, err := net.Listen("tcp", address)
-
 	if err != nil {
 		return fmt.Errorf("failed to start listener: %w", err) // %w wraps the original error for better error handling
 	}
 
-	s.listener = listener
-	s.stopped = make(chan struct{})
-	s.acceptDone = make(chan struct{})
-
+	s.listener = listener              // save it in the server  the server is now "running"
+	s.stopped = make(chan struct{})    // create a fresh signal channel for this run
+	s.acceptDone = make(chan struct{}) // create a fresh loop finished channel for this run
+	// go = run acceptLoop in a NEW goroutine (in the background)
+	// we pass the local variables, so the loop has its own copies and never needs to read s.listener (which would need the lock)
 	go s.acceptLoop(listener, s.stopped, s.acceptDone) // listener not s.listener because we want to pass the local variable, not the struct field
 
-	return nil
+	return nil // success; returns immediately without waiting for any client
 }
 
+// <-chan struct{} means this function can receive from the channel.
+// chan<- struct{} means this function can send to the channel or close it, provided it has the appropriate ownership.
 func (s *Server) acceptLoop(listener net.Listener, stopped <-chan struct{}, done chan<- struct{}) {
+	// signal that the accept loop is done when this function returns
 	defer close(done)
-
+	// The loop will keep accepting new connections until the listener is closed or an error occurs
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -183,7 +192,32 @@ func (s *Server) handle(connection net.Conn) {
 // larger than maxArgumentBytes, and requests larger than maxRequestBytes.
 // validateRequest rejects malformed or abusive requests before reflection runs.
 func validateRequest(req request) error {
-	return errors.New("TODO: implement validateRequest")
+	if req.Method == "" {
+		return errors.New("method cannot be empty")
+	}
+
+	for _, r := range req.Method {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return fmt.Errorf("method %q contains whitespace or control characters", req.Method)
+		}
+	}
+
+	if len(req.Args) > maxArguments {
+		return fmt.Errorf("too many arguments: got %d, maximum is %d", len(req.Args), maxArguments)
+	}
+
+	total := 0
+	for i, arg := range req.Args {
+		if len(arg) > maxArgumentBytes {
+			return fmt.Errorf("argument %d is larger than %d bytes", i, maxArgumentBytes)
+		}
+		total += len(arg)
+	}
+	if total > maxRequestBytes {
+		return fmt.Errorf("request arguments are larger than %d bytes", maxRequestBytes)
+	}
+
+	return nil
 }
 
 // TODO 6: Study and test this starter reflection bridge. Your required work is to
