@@ -408,3 +408,42 @@ func TestServerSurvivesBadRequests(t *testing.T) {
 		t.Fatalf("got %d, want 5", sum)
 	}
 }
+
+func TestStartOnFixedAddress(t *testing.T) {
+	// Ask the OS for a free port, then release it so the server can use it.
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := probe.Addr().String()
+	probe.Close()
+
+	server, err := NewServer(&testService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(address); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Stop()
+
+	if got := server.Address(); got != address {
+		t.Fatalf("Address() = %q, want %q", got, address)
+	}
+	client := testClient(t, server)
+	var result string
+	if err := client.Call("NoArgs", &result); err != nil || result != "ready" {
+		t.Fatalf("NoArgs() = %q, %v", result, err)
+	}
+}
+
+func TestPortZeroReportsRealPort(t *testing.T) {
+	server := startTestServer(t)
+	_, port, err := net.SplitHostPort(server.Address())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if port == "0" || port == "" {
+		t.Fatalf("Address() = %q, want a real port", server.Address())
+	}
+}
