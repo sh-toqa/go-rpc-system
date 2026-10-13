@@ -11,7 +11,7 @@ import (
 	"reflect"
 	"sync"
 	"time"
-	"unicode"
+	"unicode" // check method name
 )
 
 const (
@@ -173,7 +173,11 @@ func (s *Server) handle(connection net.Conn) {
 			_ = encoder.Encode(response{Error: fmt.Sprintf("remote method panicked: %v", recovered)})
 		}
 	}()
-
+	// LimitReader ensures that we don't read more than maxRequestBytes + 1 bytes from the connection
+	// bufio.NewReader wraps the limited reader to provide buffered reading, which can improve performance
+	// json.NewDecoder is used to decode the JSON request from the buffered reader
+	// The +1 in the limit allows us to detect if the request exceeds maxRequestBytes
+	//he decoder reads JSON data from the reader and converts it into Go values
 	decoder := json.NewDecoder(bufio.NewReader(io.LimitReader(connection, maxRequestBytes+1)))
 	var req request
 	if err := decoder.Decode(&req); err != nil {
@@ -314,6 +318,7 @@ func (c *Client) Call(method string, out any, args ...any) error {
 	}
 
 	// initialize connection with timeout
+	//(the 3-way handshake SYN / SYN-ACK / ACK
 	conn, err := net.DialTimeout("tcp", c.Address, c.Timeout)
 	if err != nil {
 		return fmt.Errorf("connect to %s: %w", c.Address, err)
@@ -327,20 +332,26 @@ func (c *Client) Call(method string, out any, args ...any) error {
 	}
 
 	// encode the request to be sent to the server
-	encoder := json.NewEncoder(conn)
+	encoder := json.NewEncoder(conn) // create an encoder whose OUTPUT goes into conn
 	req := request{
 		Method: method,
 		Args:   make([]json.RawMessage, len(args)),
 	}
+
+	//turn each argument into JSON, one at a time
+	//loop over the arguments i is the position (0, 1, 2, ...) and arg is the value
+
 	for i, arg := range args {
+		// Marshal the argument into JSON format
 		data, err := json.Marshal(arg)
 		if err != nil {
 			return fmt.Errorf("marshal argument %d: %w", i, err)
 		}
+		//puts those bytes into slot i
 		req.Args[i] = data
 	}
 
-	err = encoder.Encode(req)
+	err = encoder.Encode(req) //turn req into JSON bytes and send them through conn
 	if err != nil {
 		return fmt.Errorf("encode request: %w", err)
 	}

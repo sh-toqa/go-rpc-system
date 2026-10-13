@@ -371,7 +371,7 @@ func TestSilentClientDoesNotBlockStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	time.Sleep(50 * time.Millisecond) // giving the srver time to accept the connection
+	time.Sleep(50 * time.Millisecond) // giving the server time to accept the connection
 	done := make(chan error, 1)       // makes a room for 1 value in the channel, so that the goroutine can send the error without blocking
 	go func() {                       // withput this goroutine, the test will block forever because the server is waiting for the client to send a request
 		done <- server.Stop()
