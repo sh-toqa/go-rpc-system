@@ -146,15 +146,16 @@ func (s *Server) Stop() error {
 		return nil
 	}
 
-	if err := s.listener.Close(); err != nil {
-		return fmt.Errorf("failed to close listener: %w", err)
-	}
+	closeErr := s.listener.Close()
 
 	close(s.stopped)
 	<-s.acceptDone
 
 	s.workers.Wait()
-	s.listener = nil
+	s.listener = nil // wait for reset
+	if closeErr != nil {
+		return fmt.Errorf("failed to close listener: %w", closeErr)
+	}
 	return nil
 }
 
